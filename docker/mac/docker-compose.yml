@@ -145,7 +145,7 @@ services:
       - .env
     entrypoint: >
       /bin/sh -c "
-      until (/usr/bin/mc config host add myminio http://laravel-s3:9000 ${LARAVEL_AWS_ACCESS_KEY_ID} ${LARAVEL_AWS_SECRET_ACCESS_KEY}) do echo '...waiting...' && sleep 1; done;
+      until (/usr/bin/mc config host add myminio http://${PROJECT_DOMAIN}${S3_SUFFIX}:9000 ${LARAVEL_AWS_ACCESS_KEY_ID} ${LARAVEL_AWS_SECRET_ACCESS_KEY}) do echo '...waiting...' && sleep 1; done;
       /usr/bin/mc mb myminio/${LARAVEL_AWS_BUCKET};
       /usr/bin/mc policy public myminio/${LARAVEL_AWS_BUCKET};
       exit 0;

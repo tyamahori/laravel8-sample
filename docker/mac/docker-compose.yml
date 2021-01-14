@@ -1,0 +1,177 @@
+version: '3'
+
+services:
+  https:
+    image: steveltn/https-portal
+    container_name: ${PROJECT_DOMAIN}${HTTPS_SUFFIX}
+    ports:
+      - ${LOCAL_IP}:80:80
+      - ${LOCAL_IP}:443:443
+    volumes:
+      - https-volume:/var/lib/https-portal
+    environment:
+      STAGE: local
+      DOMAINS: "
+      ${PROJECT_DOMAIN} -> http://${PROJECT_DOMAIN}${WEB_SUFFIX},
+      schema.${PROJECT_DOMAIN} -> http://${PROJECT_DOMAIN}${WEB_SUFFIX},
+      img.${PROJECT_DOMAIN} -> http://s3:9000,
+      mail.${PROJECT_DOMAIN} -> http://mail:8025,
+      "
+    depends_on:
+      - web
+    networks:
+      default:
+        aliases:
+          - img.${PROJECT_DOMAIN}
+          - ${PROJECT_DOMAIN}
+    env_file:
+      - .env
+
+  web:
+    image: nginx:1.17.9-alpine
+    container_name: ${PROJECT_DOMAIN}${WEB_SUFFIX}
+    working_dir: /opt/${PROJECT_DOMAIN}
+    env_file:
+      - .env
+    command: >
+      /bin/sh -c
+      "envsubst '
+      $$PROJECT_DOMAIN
+      '< /etc/nginx/conf.d/default.conf.template
+      > /etc/nginx/conf.d/default.conf
+      && nginx -g 'daemon off;'"
+    volumes:
+      # file
+      - ./nginx/default.conf.template:/etc/nginx/conf.d/default.conf.template
+      # volume
+      - socket-volume:/var/run/php-fpm
+      - schemaspy-volume:/opt/schema
+      - public-volume:/opt/${PROJECT_DOMAIN}/public
+    depends_on:
+      - app
+
+  app:
+    build:
+      context: ../../src
+      dockerfile: ../docker/mac/php/Dockerfile
+      args:
+        - PROJECT_DOMAIN=${PROJECT_DOMAIN}
+    container_name: ${PROJECT_DOMAIN}${APP_SUFFIX}
+    volumes:
+      # directories
+      - ../../src/app:/opt/${PROJECT_DOMAIN}/app
+      - ../../src/bootstrap:/opt/${PROJECT_DOMAIN}/bootstrap
+      - ../../src/config:/opt/${PROJECT_DOMAIN}/config
+      - ../../src/database:/opt/${PROJECT_DOMAIN}/database
+      - ../../src/resources:/opt/${PROJECT_DOMAIN}/resources
+      - ../../src/routes:/opt/${PROJECT_DOMAIN}/routes
+      - ../../src/tests:/opt/${PROJECT_DOMAIN}/tests
+      # files
+      - ../../src/.env.example:/opt/${PROJECT_DOMAIN}/.env
+      - ../../src/artisan:/opt/${PROJECT_DOMAIN}/artisan
+      - ../../src/composer.json:/opt/${PROJECT_DOMAIN}/composer.json
+      - ../../src/composer.lock:/opt/${PROJECT_DOMAIN}/composer.lock
+      - ../../src/package.json:/opt/${PROJECT_DOMAIN}/package.json
+      - ../../src/yarn.lock:/opt/${PROJECT_DOMAIN}/yarn.lock
+      - ../../src/webpack.mix.js:/opt/${PROJECT_DOMAIN}/webpack.mix.js
+      - ../../src/phpunit.xml:/opt/${PROJECT_DOMAIN}/phpunit.xml
+      - ../../src/server.php:/opt/${PROJECT_DOMAIN}/server.php
+      # php.ini
+      - ./php/php.ini:/usr/local/etc/php/php.ini
+      # php.conf
+      - ./php/zzz-www.conf:/usr/local/etc/php-fpm.d/zzz-www.conf
+      # volumes
+      - vendor-volume:/opt/${PROJECT_DOMAIN}/vendor
+      - storage-volume:/opt/${PROJECT_DOMAIN}/storage
+      - socket-volume:/var/run/php-fpm
+      - node-volume:/opt/${PROJECT_DOMAIN}/node_modules
+      - public-volume:/opt/${PROJECT_DOMAIN}/public
+    working_dir: /opt/${PROJECT_DOMAIN}
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+      - mail
+      - s3
+
+  schemaspy:
+    container_name: ${PROJECT_DOMAIN}${SCHEMA_SUFFIX}
+    image: andrewjones/schemaspy-postgres:latest
+    command: -host ${LARAVEL_DB_HOST} -port ${LARAVEL_DB_PORT} -u ${LARAVEL_DB_USERNAME} -p ${LARAVEL_DB_PASSWORD} -db ${LARAVEL_DB_DATABASE} -s ${LARAVEL_DB_SCHEMA}
+    volumes:
+      - schemaspy-volume:/output
+    env_file:
+      - .env
+    depends_on:
+      - db
+
+  db:
+    image: postgres:13.1-alpine
+    container_name: ${PROJECT_DOMAIN}${DB_SUFFIX}
+    volumes:
+      # file
+      - ./postgre/sql/setup.sql:/docker-entrypoint-initdb.d/setup.sql
+      # volumes
+      - db-volume:/var/lib/postgresql/data
+    ports:
+      - ${LOCAL_IP}:5432:5432
+    env_file:
+      - .env
+
+  redis:
+    image: redis:6.0-alpine
+    container_name: ${PROJECT_DOMAIN}${REDIS_SUFFIX}
+    volumes:
+      - redis-volume:/data
+    command: redis-server --appendonly yes
+    env_file:
+      - .env
+    ports:
+      - ${LOCAL_IP}:6379:6379
+
+  mail:
+    image: mailhog/mailhog
+    container_name: ${PROJECT_DOMAIN}${MAIL_SUFFIX}
+    ports:
+      - ${LOCAL_IP}:8025:8025
+
+  bucket:
+    image: minio/mc
+    container_name: ${PROJECT_DOMAIN}${BUCKET_SUFFIX}
+    depends_on:
+      - s3
+    env_file:
+      - .env
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc config host add myminio http://laravel-s3:9000 ${LARAVEL_AWS_ACCESS_KEY_ID} ${LARAVEL_AWS_SECRET_ACCESS_KEY}) do echo '...waiting...' && sleep 1; done;
+      /usr/bin/mc mb myminio/${LARAVEL_AWS_BUCKET};
+      /usr/bin/mc policy public myminio/${LARAVEL_AWS_BUCKET};
+      exit 0;
+      "
+
+  s3:
+    image: minio/minio:latest
+    container_name: ${PROJECT_DOMAIN}${S3_SUFFIX}
+    env_file:
+      - .env
+    command: server /export
+    volumes:
+      - s3-vlomue:/export
+      - s3-config-vlomue:/root/.minio
+
+volumes:
+  https-volume: { }
+  vendor-volume:
+    name: ${PROJECT_DOMAIN}-vendor-volume
+  storage-volume: { }
+  redis-volume: { }
+  db-volume:
+    name: ${PROJECT_DOMAIN}-db-volume
+  socket-volume: { }
+  schemaspy-volume: { }
+  node-volume: { }
+  public-volume: { }
+  s3-vlomue: { }
+  s3-config-vlomue: { }

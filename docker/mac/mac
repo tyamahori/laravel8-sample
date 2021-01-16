@@ -150,7 +150,6 @@ case "$1" in
   ;;
 
 "https")
-  docker ps
   docker exec -it "${HTTPS}" bash
   ;;
 
